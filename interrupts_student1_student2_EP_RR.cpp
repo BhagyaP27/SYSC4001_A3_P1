@@ -3,6 +3,9 @@
  * @author Sasisekhar Govind
  * @brief template main.cpp file for Assignment 3 Part 1 of SYSC4001
  * 
+ * 
+ * @author Student 1: <Bhagya Patel, 101324150>
+ * @author Student 2: <Name, ID>
  */
 
 #include<interrupts_student1_student2.hpp>

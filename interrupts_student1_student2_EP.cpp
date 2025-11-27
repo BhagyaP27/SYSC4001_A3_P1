@@ -3,6 +3,15 @@
  * @author Sasisekhar Govind
  * @brief template main.cpp file for Assignment 3 Part 1 of SYSC4001
  * 
+ * 
+ * @author Student 1: <Bhagya Patel, 101324150>
+ * @author Student 2: <Name, ID>
+ * @brief External Priority Scheduler (No Preemption)
+ * 
+ * This scheduler uses FCFS (First Come First Serve) as the priority mechanism.
+ * Once a process starts running, it continues until:
+ * 1. It needs I/O (then goes to WAITING)
+ * 2. It completes (then goes to TERMINATED)
  */
 
 #include<interrupts_student1_student2.hpp>
@@ -28,6 +37,9 @@ std::tuple<std::string /* add std::string for bonus mark */ > run_simulation(std
 
     unsigned int current_time = 0;
     PCB running;
+
+    // Track when process return from I/O
+    std::vector<std::pair<int, unsigned int>> io_completion_times; //{PID, completion_time}
 
     //Initialize an empty running process
     idle_CPU(running);
@@ -58,12 +70,34 @@ std::tuple<std::string /* add std::string for bonus mark */ > run_simulation(std
                 job_list.push_back(process); //Add it to the list of processes
 
                 execution_status += print_exec_status(current_time, process.PID, NEW, READY);
+            } else{
+                //memory not avaible 
+                process.state = NEW;
             }
         }
 
         ///////////////////////MANAGE WAIT QUEUE/////////////////////////
         //This mainly involves keeping track of how long a process must remain in the ready queue
-
+       for(auto it = io_completion_times.begin(); it != io_completion_times.end(); ) {
+            if(it->second == current_time) {
+                // Find the process in wait_queue
+                for(auto wait_it = wait_queue.begin(); wait_it != wait_queue.end(); wait_it++) {
+                    if(wait_it->PID == it->first) {
+                        // I/O completed - move to ready queue
+                        wait_it->state = READY;
+                        ready_queue.push_back(*wait_it);
+                        sync_queue(job_list, *wait_it);
+                        
+                        execution_status += print_exec_status(current_time, wait_it->PID, WAITING, READY);
+                        wait_queue.erase(wait_it);
+                        break;
+                    }
+                }
+                it = io_completion_times.erase(it);
+            } else {
+                ++it;
+            }
+        }
         /////////////////////////////////////////////////////////////////
 
         //////////////////////////SCHEDULER//////////////////////////////
