@@ -17,11 +17,13 @@
 #include<interrupts_student1_student2.hpp>
 
 void FCFS(std::vector<PCB> &ready_queue) {
+    // MODIFICATION: Changed to priority sort - Lower PID = Higher Priority
     std::sort( 
                 ready_queue.begin(),
                 ready_queue.end(),
                 []( const PCB &first, const PCB &second ){
-                    return (first.arrival_time > second.arrival_time); 
+                    // Sort so lowest PID is at the back (will be popped first)
+                    return (first.PID > second.PID); 
                 } 
             );
 }
@@ -41,6 +43,9 @@ std::tuple<std::string /* add std::string for bonus mark */ > run_simulation(std
     // Track when process return from I/O
     std::vector<std::pair<int, unsigned int>> io_completion_times; //{PID, completion_time}
 
+    // ADDITION: Track time since last I/O for running process
+    unsigned int time_since_last_io = 0;
+
     //Initialize an empty running process
     idle_CPU(running);
 
@@ -58,37 +63,18 @@ std::tuple<std::string /* add std::string for bonus mark */ > run_simulation(std
         // 2) Manage the wait queue
         // 3) Schedule processes from the ready queue
 
-        //Population of ready queue is given to you as an example.
-        //Go through the list of proceeses
-        for(auto &process : list_processes) {
-            if(process.arrival_time == current_time) {//check if the AT = current time
-                //if so, assign memory and put the process into the ready queue
-                assign_memory(process);
-
-                process.state = READY;  //Set the process state to READY
-                ready_queue.push_back(process); //Add the process to the ready queue
-                job_list.push_back(process); //Add it to the list of processes
-
-                execution_status += print_exec_status(current_time, process.PID, NEW, READY);
-            } else{
-                //memory not avaible 
-                process.state = NEW;
-            }
-        }
-
-        ///////////////////////MANAGE WAIT QUEUE/////////////////////////
-        //This mainly involves keeping track of how long a process must remain in the ready queue
-       for(auto it = io_completion_times.begin(); it != io_completion_times.end(); ) {
+        // ADDITION: Step 1 - Handle I/O completions first (before new arrivals)
+        for(auto it = io_completion_times.begin(); it != io_completion_times.end(); ) {
             if(it->second == current_time) {
                 // Find the process in wait_queue
                 for(auto wait_it = wait_queue.begin(); wait_it != wait_queue.end(); wait_it++) {
                     if(wait_it->PID == it->first) {
                         // I/O completed - move to ready queue
                         wait_it->state = READY;
+                        execution_status += print_exec_status(current_time, wait_it->PID, WAITING, READY);
                         ready_queue.push_back(*wait_it);
                         sync_queue(job_list, *wait_it);
                         
-                        execution_status += print_exec_status(current_time, wait_it->PID, WAITING, READY);
                         wait_queue.erase(wait_it);
                         break;
                     }
@@ -98,12 +84,84 @@ std::tuple<std::string /* add std::string for bonus mark */ > run_simulation(std
                 ++it;
             }
         }
+
+        //Population of ready queue is given to you as an example.
+        //Go through the list of proceeses
+        for(auto &process : list_processes) {
+            if(process.arrival_time == current_time) {//check if the AT = current time
+                //if so, assign memory and put the process into the ready queue
+                // MODIFICATION: Only process if not already assigned
+                if(process.state == NOT_ASSIGNED) {
+                    assign_memory(process);
+
+                    process.state = READY;  //Set the process state to READY
+                    ready_queue.push_back(process); //Add the process to the ready queue
+                    job_list.push_back(process); //Add it to the list of processes
+
+                    execution_status += print_exec_status(current_time, process.PID, NEW, READY);
+                }
+            }
+        }
+
+        ///////////////////////MANAGE WAIT QUEUE/////////////////////////
+        //This mainly involves keeping track of how long a process must remain in the ready queue
+        // NOTE: This is now handled above in Step 1 (I/O completions)
         /////////////////////////////////////////////////////////////////
+
+        // ADDITION: Step 2 - Check if running process needs I/O
+        if(running.state == RUNNING && running.io_freq > 0) {
+            if(time_since_last_io >= running.io_freq) {
+                // Process needs I/O
+                execution_status += print_exec_status(current_time, running.PID, RUNNING, WAITING);
+                running.state = WAITING;
+                wait_queue.push_back(running);
+                sync_queue(job_list, running);
+                
+                // Schedule I/O completion
+                io_completion_times.push_back({running.PID, current_time + running.io_duration});
+                
+                idle_CPU(running);
+                time_since_last_io = 0;
+            }
+        }
+
+        // ADDITION: Step 3 - Check if running process has completed
+        if(running.state == RUNNING && running.remaining_time == 0) {
+            execution_status += print_exec_status(current_time, running.PID, RUNNING, TERMINATED);
+            terminate_process(running, job_list);
+            idle_CPU(running);
+        }
 
         //////////////////////////SCHEDULER//////////////////////////////
         FCFS(ready_queue); //example of FCFS is shown here
+        
+        // ADDITION: Step 4 - Schedule next process if CPU is idle
+        if(running.state == NOT_ASSIGNED && !ready_queue.empty()) {
+            running = ready_queue.back();
+            ready_queue.pop_back();
+            
+            execution_status += print_exec_status(current_time, running.PID, READY, RUNNING);
+            running.state = RUNNING;
+            sync_queue(job_list, running);
+            time_since_last_io = 0;
+        }
         /////////////////////////////////////////////////////////////////
 
+        // ADDITION: Step 5 - Execute one time unit
+        if(running.state == RUNNING && running.remaining_time > 0) {
+            running.remaining_time--;
+            time_since_last_io++;
+            sync_queue(job_list, running);
+        }
+
+        // ADDITION: Step 6 - Advance time
+        current_time++;
+
+        // ADDITION: Safety check to prevent infinite loops
+        if(current_time > 10000) {
+            std::cerr << "Simulation timeout at time " << current_time << std::endl;
+            break;
+        }
     }
     
     //Close the output table
