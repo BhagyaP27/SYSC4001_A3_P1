@@ -6,25 +6,23 @@
  * 
  * @author Student 1: <Bhagya Patel, 101324150>
  * @author Student 2: <Name, ID>
+ * @brief External Priority Scheduler (No Preemption)
+ * 
+ * This scheduler uses FCFS (First Come First Serve) as the priority mechanism.
+ * Once a process starts running, it continues until:
+ * 1. It needs I/O (then goes to WAITING)
+ * 2. It completes (then goes to TERMINATED)
  */
 
 #include<interrupts_student1_student2.hpp>
 
-// ADDITION: Time quantum constant
-const unsigned int TIME_QUANTUM = 100;
-
 void FCFS(std::vector<PCB> &ready_queue) {
-    // MODIFICATION: For EP_RR, we need priority sort (Lower PID = Higher Priority)
-    // Within same priority, maintain FCFS order
+    // MODIFICATION: Changed to priority sort - Lower PID = Higher Priority
     std::sort( 
                 ready_queue.begin(),
                 ready_queue.end(),
                 []( const PCB &first, const PCB &second ){
-                    if(first.PID == second.PID) {
-                        // Same priority - use FCFS (arrival time)
-                        return (first.arrival_time > second.arrival_time);
-                    }
-                    // Different priority - lower PID goes to back (higher priority)
+                    // Sort so lowest PID is at the back (will be popped first)
                     return (first.PID > second.PID); 
                 } 
             );
@@ -42,11 +40,10 @@ std::tuple<std::string /* add std::string for bonus mark */ > run_simulation(std
     unsigned int current_time = 0;
     PCB running;
 
-    // ADDITION: Track I/O completion times
-    std::vector<std::pair<int, unsigned int>> io_completion_times;
-    
-    // ADDITION: Track time quantum and I/O timing
-    unsigned int time_quantum_remaining = TIME_QUANTUM;
+    // Track when process return from I/O
+    std::vector<std::pair<int, unsigned int>> io_completion_times; //{PID, completion_time}
+
+    // ADDITION: Track time since last I/O for running process
     unsigned int time_since_last_io = 0;
 
     //Initialize an empty running process
@@ -66,16 +63,18 @@ std::tuple<std::string /* add std::string for bonus mark */ > run_simulation(std
         // 2) Manage the wait queue
         // 3) Schedule processes from the ready queue
 
-        // ADDITION: Step 1 - Handle I/O completions
+        // ADDITION: Step 1 - Handle I/O completions first (before new arrivals)
         for(auto it = io_completion_times.begin(); it != io_completion_times.end(); ) {
             if(it->second == current_time) {
+                // Find the process in wait_queue
                 for(auto wait_it = wait_queue.begin(); wait_it != wait_queue.end(); wait_it++) {
                     if(wait_it->PID == it->first) {
+                        // I/O completed - move to ready queue
                         wait_it->state = READY;
                         execution_status += print_exec_status(current_time, wait_it->PID, WAITING, READY);
-                        
                         ready_queue.push_back(*wait_it);
                         sync_queue(job_list, *wait_it);
+                        
                         wait_queue.erase(wait_it);
                         break;
                     }
@@ -91,7 +90,7 @@ std::tuple<std::string /* add std::string for bonus mark */ > run_simulation(std
         for(auto &process : list_processes) {
             if(process.arrival_time == current_time) {//check if the AT = current time
                 //if so, assign memory and put the process into the ready queue
-                // MODIFICATION: Check if not already processed
+                // MODIFICATION: Only process if not already assigned
                 if(process.state == NOT_ASSIGNED) {
                     assign_memory(process);
 
@@ -106,62 +105,38 @@ std::tuple<std::string /* add std::string for bonus mark */ > run_simulation(std
 
         ///////////////////////MANAGE WAIT QUEUE/////////////////////////
         //This mainly involves keeping track of how long a process must remain in the ready queue
-        // NOTE: Now handled above in Step 1
+        // NOTE: This is now handled above in Step 1 (I/O completions)
         /////////////////////////////////////////////////////////////////
 
-        // ADDITION: Step 2 - Check for preemption by higher priority process
-        // This is what makes EP_RR different from EP - we allow preemption!
-        if(running.state == RUNNING && !ready_queue.empty()) {
-            FCFS(ready_queue);  // Sort to find highest priority
-            PCB highest_priority = ready_queue.back();
-            
-            // Preempt if higher priority process (lower PID) is waiting
-            if(highest_priority.PID < running.PID) {
-                execution_status += print_exec_status(current_time, running.PID, RUNNING, READY);
-                running.state = READY;
-                ready_queue.push_back(running);
-                sync_queue(job_list, running);
-                idle_CPU(running);
-                time_quantum_remaining = TIME_QUANTUM;
-            }
-        }
-
-        // ADDITION: Step 3 - Check if running process needs I/O
-        if(running.state == RUNNING && running.io_freq > 0 && time_since_last_io >= running.io_freq) {
-            execution_status += print_exec_status(current_time, running.PID, RUNNING, WAITING);
-            running.state = WAITING;
-            wait_queue.push_back(running);
-            sync_queue(job_list, running);
-            
-            io_completion_times.push_back({running.PID, current_time + running.io_duration});
-            
-            idle_CPU(running);
-            time_since_last_io = 0;
-            time_quantum_remaining = TIME_QUANTUM;
-        }
-
-        // ADDITION: Step 4 - Check if running process has completed
+        // ADDITION: Step 2 - Check if running process has completed (check BEFORE I/O)
         if(running.state == RUNNING && running.remaining_time == 0) {
             execution_status += print_exec_status(current_time, running.PID, RUNNING, TERMINATED);
             terminate_process(running, job_list);
             idle_CPU(running);
-            time_quantum_remaining = TIME_QUANTUM;
+            time_since_last_io = 0;
         }
 
-        // ADDITION: Step 5 - Check for time quantum expiration (for same priority processes)
-        if(running.state == RUNNING && time_quantum_remaining == 0 && running.remaining_time > 0) {
-            execution_status += print_exec_status(current_time, running.PID, RUNNING, READY);
-            running.state = READY;
-            ready_queue.push_back(running);
-            sync_queue(job_list, running);
-            idle_CPU(running);
-            time_quantum_remaining = TIME_QUANTUM;
+        // ADDITION: Step 3 - Check if running process needs I/O
+        if(running.state == RUNNING && running.io_freq > 0) {
+            if(time_since_last_io >= running.io_freq) {
+                // Process needs I/O
+                execution_status += print_exec_status(current_time, running.PID, RUNNING, WAITING);
+                running.state = WAITING;
+                wait_queue.push_back(running);
+                sync_queue(job_list, running);
+                
+                // Schedule I/O completion
+                io_completion_times.push_back({running.PID, current_time + running.io_duration});
+                
+                idle_CPU(running);
+                time_since_last_io = 0;
+            }
         }
 
         //////////////////////////SCHEDULER//////////////////////////////
         FCFS(ready_queue); //example of FCFS is shown here
         
-        // ADDITION: Step 6 - Schedule next process if CPU is idle
+        // ADDITION: Step 4 - Schedule next process if CPU is idle
         if(running.state == NOT_ASSIGNED && !ready_queue.empty()) {
             running = ready_queue.back();
             ready_queue.pop_back();
@@ -169,25 +144,23 @@ std::tuple<std::string /* add std::string for bonus mark */ > run_simulation(std
             execution_status += print_exec_status(current_time, running.PID, READY, RUNNING);
             running.state = RUNNING;
             sync_queue(job_list, running);
-            time_quantum_remaining = TIME_QUANTUM;
             time_since_last_io = 0;
         }
         /////////////////////////////////////////////////////////////////
 
-        // ADDITION: Step 7 - Execute one time unit
-        if(running.state == RUNNING) {
+        // ADDITION: Step 5 - Execute one time unit (AFTER all checks)
+        if(running.state == RUNNING && running.remaining_time > 0) {
             running.remaining_time--;
-            time_quantum_remaining--;
             time_since_last_io++;
             sync_queue(job_list, running);
         }
 
-        // ADDITION: Step 8 - Advance time
+        // ADDITION: Step 6 - Advance time
         current_time++;
 
-        // ADDITION: Safety check
+        // ADDITION: Safety check to prevent infinite loops
         if(current_time > 10000) {
-            std::cerr << "Simulation timeout" << std::endl;
+            std::cerr << "Simulation timeout at time " << current_time << std::endl;
             break;
         }
     }
