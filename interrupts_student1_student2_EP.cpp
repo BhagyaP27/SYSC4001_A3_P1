@@ -108,7 +108,7 @@ std::tuple<std::string /* add std::string for bonus mark */ > run_simulation(std
         // NOTE: This is now handled above in Step 1 (I/O completions)
         /////////////////////////////////////////////////////////////////
 
-        // ADDITION: Step 2 - Check if running process has completed (check BEFORE I/O)
+        //Step 2 - Check if running process has completed (check BEFORE I/O)
         if(running.state == RUNNING && running.remaining_time == 0) {
             execution_status += print_exec_status(current_time, running.PID, RUNNING, TERMINATED);
             terminate_process(running, job_list);
@@ -116,7 +116,7 @@ std::tuple<std::string /* add std::string for bonus mark */ > run_simulation(std
             time_since_last_io = 0;
         }
 
-        // ADDITION: Step 3 - Check if running process needs I/O
+        // Step 3 - Check if running process needs I/O
         if(running.state == RUNNING && running.io_freq > 0) {
             if(time_since_last_io >= running.io_freq) {
                 // Process needs I/O
@@ -136,7 +136,7 @@ std::tuple<std::string /* add std::string for bonus mark */ > run_simulation(std
         //////////////////////////SCHEDULER//////////////////////////////
         FCFS(ready_queue); //example of FCFS is shown here
         
-        // ADDITION: Step 4 - Schedule next process if CPU is idle
+        // Step 4 - Schedule next process if CPU is idle
         if(running.state == NOT_ASSIGNED && !ready_queue.empty()) {
             running = ready_queue.back();
             ready_queue.pop_back();

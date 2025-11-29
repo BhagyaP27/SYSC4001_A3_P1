@@ -3,9 +3,15 @@
  * @author Sasisekhar Govind
  * @brief template main.cpp file for Assignment 3 Part 1 of SYSC4001
  * 
+ * 
+ * @author Student 1: <Bhagya Patel, 101324150>
+ * @brief This file implements a Round Robin Scheduler with a time quantum of 100ms.
  */
 
 #include<interrupts_student1_student2.hpp>
+
+// Round Robin uses a time quantum of 100ms
+const unsigned int TIME_QUANTUM = 100;
 
 void FCFS(std::vector<PCB> &ready_queue) {
     std::sort( 
@@ -29,6 +35,13 @@ std::tuple<std::string /* add std::string for bonus mark */ > run_simulation(std
     unsigned int current_time = 0;
     PCB running;
 
+    // Keep track of when I/O operations will finish
+    std::vector<std::pair<int, unsigned int>> io_completion_times; //{PID, completion_time}
+    
+    // Track the time quantum and I/O timing for the running process
+    unsigned int time_quantum_remaining = TIME_QUANTUM;
+    unsigned int time_since_last_io = 0;
+
     //Initialize an empty running process
     idle_CPU(running);
 
@@ -46,30 +59,120 @@ std::tuple<std::string /* add std::string for bonus mark */ > run_simulation(std
         // 2) Manage the wait queue
         // 3) Schedule processes from the ready queue
 
+        // First, check if any I/O operations have completed and move those processes back to ready
+        for(auto it = io_completion_times.begin(); it != io_completion_times.end(); ) {
+            if(it->second == current_time) {
+                // Find the process in wait_queue
+                for(auto wait_it = wait_queue.begin(); wait_it != wait_queue.end(); wait_it++) {
+                    if(wait_it->PID == it->first) {
+                        // I/O is done, move back to ready queue
+                        wait_it->state = READY;
+                        execution_status += print_exec_status(current_time, wait_it->PID, WAITING, READY);
+                        
+                        // Add to front of ready queue to maintain FIFO order
+                        ready_queue.insert(ready_queue.begin(), *wait_it);
+                        sync_queue(job_list, *wait_it);
+                        wait_queue.erase(wait_it);
+                        break;
+                    }
+                }
+                it = io_completion_times.erase(it);
+            } else {
+                ++it;
+            }
+        }
+
         //Population of ready queue is given to you as an example.
         //Go through the list of proceeses
         for(auto &process : list_processes) {
             if(process.arrival_time == current_time) {//check if the AT = current time
                 //if so, assign memory and put the process into the ready queue
-                assign_memory(process);
+                // Make sure we haven't already processed this arrival
+                if(process.state == NOT_ASSIGNED) {
+                    assign_memory(process);
 
-                process.state = READY;  //Set the process state to READY
-                ready_queue.push_back(process); //Add the process to the ready queue
-                job_list.push_back(process); //Add it to the list of processes
+                    process.state = READY;  //Set the process state to READY
+                    // For Round Robin, add to front to maintain FIFO order
+                    ready_queue.insert(ready_queue.begin(), process);
+                    job_list.push_back(process); //Add it to the list of processes
 
-                execution_status += print_exec_status(current_time, process.PID, NEW, READY);
+                    execution_status += print_exec_status(current_time, process.PID, NEW, READY);
+                }
             }
         }
 
         ///////////////////////MANAGE WAIT QUEUE/////////////////////////
         //This mainly involves keeping track of how long a process must remain in the ready queue
-
+        // (This is now handled above when we check I/O completions)
         /////////////////////////////////////////////////////////////////
+
+        // Check if the running process has finished all its work
+        if(running.state == RUNNING && running.remaining_time == 0) {
+            execution_status += print_exec_status(current_time, running.PID, RUNNING, TERMINATED);
+            terminate_process(running, job_list);
+            idle_CPU(running);
+            time_quantum_remaining = TIME_QUANTUM;
+        }
+
+        // Check if the running process needs to do I/O
+        if(running.state == RUNNING && running.io_freq > 0 && time_since_last_io >= running.io_freq) {
+            execution_status += print_exec_status(current_time, running.PID, RUNNING, WAITING);
+            running.state = WAITING;
+            wait_queue.push_back(running);
+            sync_queue(job_list, running);
+            
+            // Schedule when the I/O will be done
+            io_completion_times.push_back({running.PID, current_time + running.io_duration});
+            
+            idle_CPU(running);
+            time_since_last_io = 0;
+            time_quantum_remaining = TIME_QUANTUM;
+        }
+
+        // Round Robin: check if the time quantum has expired
+        // If so, preempt the process and put it at the back of the ready queue
+        if(running.state == RUNNING && time_quantum_remaining == 0 && running.remaining_time > 0) {
+            execution_status += print_exec_status(current_time, running.PID, RUNNING, READY);
+            running.state = READY;
+            // Put the preempted process at the back of the line
+            ready_queue.insert(ready_queue.begin(), running);
+            sync_queue(job_list, running);
+            idle_CPU(running);
+            time_quantum_remaining = TIME_QUANTUM;
+        }
 
         //////////////////////////SCHEDULER//////////////////////////////
         FCFS(ready_queue); //example of FCFS is shown here
+        
+        // If CPU is idle, pick the next process from the ready queue
+        if(running.state == NOT_ASSIGNED && !ready_queue.empty()) {
+            running = ready_queue.back();
+            ready_queue.pop_back();
+            
+            execution_status += print_exec_status(current_time, running.PID, READY, RUNNING);
+            running.state = RUNNING;
+            sync_queue(job_list, running);
+            time_quantum_remaining = TIME_QUANTUM;  // Give the new process a full quantum
+            time_since_last_io = 0;
+        }
         /////////////////////////////////////////////////////////////////
 
+        // Execute one time unit of the running process
+        if(running.state == RUNNING) {
+            running.remaining_time--;
+            time_quantum_remaining--;  // Count down the quantum
+            time_since_last_io++;
+            sync_queue(job_list, running);
+        }
+
+        // Move time forward by 1ms
+        current_time++;
+
+        // Safety check to prevent infinite loops during testing
+        if(current_time > 10000) {
+            std::cerr << "Simulation timeout at time " << current_time << std::endl;
+            break;
+        }
     }
     
     //Close the output table
@@ -113,7 +216,29 @@ int main(int argc, char** argv) {
     //With the list of processes, run the simulation
     auto [exec] = run_simulation(list_process);
 
-    write_output(exec, "execution.txt");
+    // Extract test case number from input filename to name the output file accordingly
+    std::string output_filename = "execution.txt";  // default
+    std::string input_filename = file_name;
+    
+    // Look for "test" in the filename and grab the number after it
+    size_t test_pos = input_filename.find("test");
+    if(test_pos != std::string::npos) {
+        size_t num_start = test_pos + 4;  // Start after "test"
+        size_t num_end = input_filename.find_first_not_of("0123456789", num_start);
+        
+        if(num_end == std::string::npos) {
+            num_end = input_filename.find(".txt");
+        }
+        
+        if(num_start < input_filename.length()) {
+            std::string test_number = input_filename.substr(num_start, num_end - num_start);
+            if(!test_number.empty()) {
+                output_filename = "execution" + test_number + ".txt";
+            }
+        }
+    }
+
+    write_output(exec, output_filename.c_str());
 
     return 0;
 }
